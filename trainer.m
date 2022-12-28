@@ -11,8 +11,8 @@ diary('output.txt')
 
 %% Inputs
 % input dialog !!!!
-% data_file='lat_lon_elv_concentration_age.csv';
-data_file='primary_Be_lat_lon_alt_thick_den_shield_year_Be-10_dBe-10_TrueAge.csv'; % fracaso
+data_file='lat_lon_elv_concentration_age.csv';
+% data_file='primary_Be_lat_lon_alt_thick_den_shield_year_Be-10_dBe-10_TrueAge.csv'; % fracaso
 % data_file='x_log10x.csv';
 
 %% Check file
@@ -26,29 +26,37 @@ secondary_learning_data=csvread(secondary_data_file);
 % intially consider only one output
 n_input_columns=size(learning_data,2)-1;
 n_objective_columns=1;
+% n_input_columns=size(learning_data,2)-2;
+% n_objective_columns=2;
 
 %% Naural and fitting options
-n_generations=100e3; % number of generations
-samples_per_generation=min(5e3,max(ceil(max(size(learning_data,1)/10)),min(100,size(learning_data,1)))); %number of input data used for each generation
+n_generations=3e6; % number of generations
+% samples_per_generation=min(5e3,max(ceil(max(size(learning_data,1)/10)),min(100,size(learning_data,1)))); %number of input data used for each generation
+samples_per_generation=min(5e3,max(ceil(max(size(learning_data,1))),min(100,size(learning_data,1)))); %number of input data used for each generation
+% samples_per_generation=size(learning_data,1)-1
 
-n_hidden_layers=2; % number of layers in the neural network
+n_hidden_layers=10; % number of layers in the neural network
 n_extra_neurons_per_layer=ceil(size(learning_data,2)/5); % number of neurons extra neurons in first hidden layer
 
-epsilon_max=1; % maximum ε/parameter
+allow_log_conversion=1; % allow considering input/output data in the log scale
+alpha=0; % weight of the log term of the cost function (no need when using log conversion)
+
+epsilon_max=0.1; % maximum value of epsilon
+
 change_only_one_parameter=0.5; % if 1, only one parameter is changed in each generation
 percent_parameters_to_change=1/n_hidden_layers; % percentage of parameters to fit each generation when changing more than one paratmeter
 n_initial_learning_generations=round(n_generations*0.1); % genereations with lots of mutants and no pruning
 
 use_bias=1; % 0 or 1: (not) to use bias parameters
-prune_neurons=1; % pruning or not
-
-allow_log_conversion=1; % allow considering input/output data in the log scale
+prune_neurons=0; % pruning or not (actually, it never prunes...)
 
 layer_structure=...
     [n_input_columns,...
     max([n_input_columns,n_objective_columns]+n_extra_neurons_per_layer)*ones(1,n_hidden_layers>0),...
     round(max([n_input_columns,n_objective_columns]))*ones(1,n_hidden_layers-1),...
-    n_objective_columns]; 
+    n_objective_columns];
+% layer_structure=[4 8 7 6 5 4 3 2 1]
+
 
 % options dialog !!!!
 % recalculate parameters
@@ -114,26 +122,29 @@ transform_function=@(column,data)...
 detransform_function=@(column,data)...
     (log_distribution(column)==1)*exp((log_distribution(column)==1)*(data*range_data(column)+min_data(column)))+...
     (log_distribution(column)==0)*   (data*range_data(column)+min_data(column)); % linear 0-1
+% transform_function=@(column,data) 0.*column+data; % no tranform
+% detransform_function=@(column,data) 0.*column+data; % no transform
 
 % Transform to 0-1
 figure('units','normalized','outerposition',[0 0 1 1])
 for n=1:n_input_columns+n_objective_columns
-     subplot(2,max(n_input_columns,n_objective_columns),n)
+    subplot(2,max(n_input_columns,n_objective_columns),n)
     if n<=n_input_columns
         inputs(:,n)=transform_function(n,raw_inputs(:,n));
-        hist(inputs(:,n),linspace(0,1,20))
+        %         hist(inputs(:,n),linspace(0,1,20))
+        hist(inputs(:,n),20)
         xlabel(['NN input ' num2str(n)])
     else
         objectives(:,n-n_input_columns)=transform_function(n,raw_objectives(:,n-n_input_columns));
-        hist(objectives(:,n-n_input_columns),linspace(0,1,20))
+        %         hist(objectives(:,n-n_input_columns),linspace(0,1,20))
+        hist(objectives(:,n-n_input_columns),20)
         xlabel(['NN output ' num2str(n-n_input_columns)])
     end
-    
-    xlim([0 1])
+    %     xlim([0 1])
 end
 drawnow;
-% pause(5) % have a look to the distribution of tranformed inputs/outputs for 5 sec
-% close all hidden
+pause(5) % have a look to the distribution of tranformed inputs/outputs for 5 sec
+close all hidden
 
 %% Build neural network
 % n_hidden_layers=5;
@@ -187,9 +198,15 @@ neural_network_options.n_weights=sum(layer_structure(2:end).*layer_structure(1:e
 neural_network_options.n_bias=sum(layer_structure(2:end));
 neural_network_options.n_parameters=n_weights+n_bias;
 
+neural_network_options.alpha=alpha; % multiplier of the log term of the cost function
+
 % activation function(s)
+% neural_network_options.hidden_activation_function=@(z)...
+%     1./(1+exp(-z)); % sigmoid
+% neural_network_options.hidden_activation_function=@(z)...
+%     tanh(z); % -1 1 sigmoid
 neural_network_options.hidden_activation_function=@(z)...
-    1./(1+exp(-z)); % sigmoid
+    log(1+exp(z)); % softplus
 
 if neural_network_options.n_parameters>size(learning_data,1)
     warning('More parameters than data. Clearly overfitting!')
@@ -238,7 +255,11 @@ figure('units','normalized','outerposition',[0.5 0 0.5 1])
 subplot(2,1,1)
 hold on
 xlabel('generation')
-ylabel('MSE')
+if alpha==0
+    ylabel('MSE')
+else
+    ylabel('MSE-ish')
+end
 % title(['Brain structure: ' char(8594) ' ' num2str(layer_structure) ' ' char(8594)])
 set(gca, 'YScale', 'log')
 % set(gca, 'XScale', 'log')
@@ -281,7 +302,7 @@ for generation=1:n_generations
     else
         parameters_to_change=rand(size(parameters))>percent_parameters_to_change;
     end
-    epsilon=epsilon_max*cost_i^0.5.*seed_generator(par_index).*parameters_to_change.*parameters;
+    epsilon=epsilon_max*min(1,cost_i)^0.5.*seed_generator(par_index).*parameters_to_change.*parameters;
 %         epsilon=epsilon_max.*rand.*seed_generator().*parameters_to_change;
     [~,cost_i_plus]=brain(neural_network_options,parameters+epsilon,inputs_i,objectives_i);
     [~,cost_i_minus]=brain(neural_network_options,parameters-epsilon,inputs_i,objectives_i);
@@ -326,6 +347,8 @@ for generation=1:n_generations
         %         disp(['Nothing changed in generation ' num2str(generation)])
     end
     
+    cost_i=best_cost;
+
     parameters=parameters.*par_index; % prune
     
     % plot and prune every now and then
@@ -343,7 +366,7 @@ for generation=1:n_generations
         hold on
         plot_indexes=max(1,generation-draw_each+1):generation;
         plot(plot_indexes,cost_values(plot_indexes),'.b')
-        ylim([10^floor(log10(min(cost_values(1:generation)))) max(1,cost_i)])
+        ylim([10^floor(log10(min(cost_values(1:generation)))) max(1,max(cost_values(~isnan(cost_values))))])
         xlim([0 n_generations])
         
         % plot brain
@@ -375,7 +398,7 @@ for generation=1:n_generations
     
     end
 end
-[~,cost_i]=brain(neural_network_options,parameters,inputs_i,objectives_i);
+% [~,cost_i]=brain(neural_network_options,parameters,inputs_i,objectives_i);
 subplot(2,1,1)
 hold on
 text(generation,cost_i,[' ' num2str(cost_i) ' (last)'],'Color','k')
@@ -453,6 +476,7 @@ disp(' ')
 % disp(' ')
 
 %% Print brain
+disp('Brain not shown. Check activation function before uncomment this section.')
 disp('Brain:')
 % disp(['Parameter''s values:'])
 for n=1:numel(parameters)
@@ -469,19 +493,22 @@ for n=1:n_input_columns
     end
 end
 
+disp(['Activation function (AF):'])
+disp(neural_network_options.hidden_activation_function)
+
 for neuron=neural_network_options.n_input_neurons+1:neural_network_options.n_neurons
     parent_neurons=find(...
         neural_network_options.layer_index==(neural_network_options.layer_index(neuron)-1)...
         );
     weight_indexes=...
         neural_network_options.weight_index_min(neuron):neural_network_options.weight_index_max(neuron);
-    string_neuron_formula=['y(' num2str(neuron) ') = 1/(1+exp('];
+    string_neuron_formula=['y(' num2str(neuron) ') = AF('];
     for k=1:numel(parent_neurons)
         string_neuron_formula=[string_neuron_formula...
             'y(' num2str(parent_neurons(k)) ') * p(' num2str(weight_indexes(k)) ') + '];
     end
     string_neuron_formula=[string_neuron_formula...
-     'p(' num2str(neural_network_options.bias_index(neuron)) '))'];
+     'p(' num2str(neural_network_options.bias_index(neuron)) ')'];
     disp(string_neuron_formula)
 end
 
